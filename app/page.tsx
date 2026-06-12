@@ -1,0 +1,200 @@
+'use client';
+
+import { useEffect, useMemo, useRef, useState } from 'react';
+import ReviewQueue, { QueueFilter } from '@/components/ReviewQueue';
+import CertDetail from '@/components/CertDetail';
+import { SAMPLE_DOCS } from '@/lib/mock';
+import { suggestStatus, validateExtraction } from '@/lib/validation';
+import { Certificate, Extraction } from '@/lib/types';
+
+function buildCertificate(id: string, fileName: string, extraction: Extraction): Certificate {
+  const issues = validateExtraction(extraction);
+  const status = suggestStatus(issues);
+  const now = new Date().toISOString();
+  return {
+    id,
+    fileName,
+    receivedAt: now,
+    extraction,
+    issues,
+    status,
+    audit: [
+      { at: now, actor: 'system', action: 'Document ingested and fields extracted' },
+      {
+        at: now,
+        actor: 'system',
+        action:
+          status === 'auto_approved'
+            ? 'Passed all validation rules — auto-approved'
+            : `Routed to human review (${issues.length} issue${issues.length > 1 ? 's' : ''})`,
+      },
+    ],
+  };
+}
+
+export default function Home() {
+  const [certs, setCerts] = useState<Certificate[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Seed the queue on the client only: timestamps are generated at runtime,
+  // so building them during SSR would cause a hydration mismatch.
+  useEffect(() => {
+    const seeded = SAMPLE_DOCS.map((s) => buildCertificate(s.id, s.fileName, s.extraction));
+    setCerts(seeded);
+    setSelectedId(seeded[0]?.id ?? null);
+  }, []);
+  const [filter, setFilter] = useState<QueueFilter>('all');
+  const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState<'mock' | 'live' | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const stats = useMemo(() => {
+    const total = certs.length;
+    const auto = certs.filter((c) => c.status === 'auto_approved').length;
+    const pending = certs.filter((c) => c.status === 'needs_review').length;
+    const done = certs.filter((c) => c.status === 'approved' || c.status === 'rejected').length;
+    return { total, auto, pending, done };
+  }, [certs]);
+
+  const selected = certs.find((c) => c.id === selectedId) ?? null;
+
+  async function handleUpload(file: File) {
+    setBusy(true);
+    setError(null);
+    try {
+      const base64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result as string;
+          resolve(result.split(',')[1] ?? '');
+        };
+        reader.onerror = () => reject(new Error('Could not read file'));
+        reader.readAsDataURL(file);
+      });
+
+      const res = await fetch('/api/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fileName: file.name,
+          fileBase64: base64,
+          mediaType: file.type || 'application/pdf',
+        }),
+      });
+      const data = (await res.json()) as {
+        extraction?: Extraction;
+        mode?: 'mock' | 'live';
+        error?: string;
+      };
+      if (!res.ok || !data.extraction) {
+        throw new Error(data.error ?? 'Extraction failed');
+      }
+      setMode(data.mode ?? null);
+      const cert = buildCertificate(`upload-${Date.now()}`, file.name, data.extraction);
+      setCerts((prev) => [cert, ...prev]);
+      setSelectedId(cert.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong');
+    } finally {
+      setBusy(false);
+      if (fileInput.current) fileInput.current.value = '';
+    }
+  }
+
+  function handleDecision(id: string, decision: 'approved' | 'rejected', note: string) {
+    setCerts((prev) =>
+      prev.map((c) =>
+        c.id === id
+          ? {
+              ...c,
+              status: decision,
+              reviewerNote: note.trim() || undefined,
+              audit: [
+                ...c.audit,
+                {
+                  at: new Date().toISOString(),
+                  actor: 'reviewer' as const,
+                  action: decision === 'approved' ? 'Approved by reviewer' : 'Rejected by reviewer',
+                },
+              ],
+            }
+          : c
+      )
+    );
+  }
+
+  return (
+    <main className="shell">
+      <div className="topbar">
+        <div className="brand">
+          <h1>CertIQ</h1>
+          <span>AI exemption certificate review · human-in-the-loop</span>
+        </div>
+        <span className={`mode-pill ${mode === 'live' ? 'live' : ''}`}>
+          {mode === 'live' ? 'Live extraction (Claude)' : 'Mock mode — add ANTHROPIC_API_KEY for live extraction'}
+        </span>
+      </div>
+
+      <div className="stats">
+        <div className="stat">
+          <div className="label">Total documents</div>
+          <div className="value">{stats.total}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Auto-approved</div>
+          <div className="value">{stats.auto}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Awaiting review</div>
+          <div className="value">{stats.pending}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Completed</div>
+          <div className="value">{stats.done}</div>
+        </div>
+      </div>
+
+      <div className="upload-zone">
+        <p>
+          Upload an exemption certificate (PDF, PNG, JPG). The AI extracts fields with
+          per-field confidence; the rules engine decides whether a human needs to look.
+        </p>
+        <div className="actions">
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".pdf,.png,.jpg,.jpeg,.webp"
+            style={{ display: 'none' }}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleUpload(file);
+            }}
+          />
+          <button className="btn primary" disabled={busy} onClick={() => fileInput.current?.click()}>
+            {busy ? 'Extracting…' : 'Upload certificate'}
+          </button>
+        </div>
+      </div>
+
+      {error && <div className="issue error" style={{ marginBottom: 12 }}>{error}</div>}
+
+      <div className="layout">
+        <ReviewQueue
+          certs={certs}
+          selectedId={selectedId}
+          filter={filter}
+          onSelect={setSelectedId}
+          onFilter={setFilter}
+        />
+        {selected ? (
+          <CertDetail cert={selected} onDecision={handleDecision} />
+        ) : (
+          <div className="panel">
+            <div className="empty">Select a certificate to review.</div>
+          </div>
+        )}
+      </div>
+    </main>
+  );
+}
