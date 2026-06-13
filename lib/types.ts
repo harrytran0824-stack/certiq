@@ -31,6 +31,11 @@ export interface AuditEntry {
   action: string;
 }
 
+export interface DocumentPreview {
+  kind: 'pdf' | 'image' | 'sample';
+  dataUrl: string;
+}
+
 export interface Certificate {
   id: string;
   fileName: string;
@@ -40,6 +45,7 @@ export interface Certificate {
   status: CertStatus;
   reviewerNote?: string;
   audit: AuditEntry[];
+  preview?: DocumentPreview;
 }
 
 export const FIELD_KEYS: FieldKey[] = [
