@@ -5,9 +5,15 @@ import ReviewQueue, { QueueFilter } from '@/components/ReviewQueue';
 import CertDetail from '@/components/CertDetail';
 import { SAMPLE_DOCS } from '@/lib/mock';
 import { suggestStatus, validateExtraction } from '@/lib/validation';
-import { Certificate, Extraction } from '@/lib/types';
+import { Certificate, DocumentPreview, Extraction } from '@/lib/types';
+import { sampleDocDataUrl } from '@/lib/preview';
 
-function buildCertificate(id: string, fileName: string, extraction: Extraction): Certificate {
+function buildCertificate(
+  id: string,
+  fileName: string,
+  extraction: Extraction,
+  preview?: DocumentPreview
+): Certificate {
   const issues = validateExtraction(extraction);
   const status = suggestStatus(issues);
   const now = new Date().toISOString();
@@ -18,6 +24,8 @@ function buildCertificate(id: string, fileName: string, extraction: Extraction):
     extraction,
     issues,
     status,
+    preview:
+      preview ?? { kind: 'sample', dataUrl: sampleDocDataUrl(extraction, fileName) },
     audit: [
       { at: now, actor: 'system', action: 'Document ingested and fields extracted' },
       {
@@ -45,6 +53,7 @@ export default function Home() {
   }, []);
   const [filter, setFilter] = useState<QueueFilter>('all');
   const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
   const [mode, setMode] = useState<'mock' | 'live' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -59,47 +68,76 @@ export default function Home() {
 
   const selected = certs.find((c) => c.id === selectedId) ?? null;
 
-  async function handleUpload(file: File) {
+  async function extractOne(file: File): Promise<Certificate> {
+    const base64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        resolve(result.split(',')[1] ?? '');
+      };
+      reader.onerror = () => reject(new Error('Could not read file'));
+      reader.readAsDataURL(file);
+    });
+
+    const res = await fetch('/api/extract', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        fileName: file.name,
+        fileBase64: base64,
+        mediaType: file.type || 'application/pdf',
+      }),
+    });
+    const data = (await res.json()) as {
+      extraction?: Extraction;
+      mode?: 'mock' | 'live';
+      error?: string;
+    };
+    if (!res.ok || !data.extraction) {
+      throw new Error(data.error ?? 'Extraction failed');
+    }
+    setMode(data.mode ?? null);
+    const mediaType = file.type || 'application/pdf';
+    const preview: DocumentPreview = {
+      kind: mediaType === 'application/pdf' ? 'pdf' : 'image',
+      dataUrl: `data:${mediaType};base64,${base64}`,
+    };
+    return buildCertificate(
+      `upload-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      file.name,
+      data.extraction,
+      preview
+    );
+  }
+
+  async function handleUpload(files: File[]) {
+    if (files.length === 0) return;
     setBusy(true);
     setError(null);
-    try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = reader.result as string;
-          resolve(result.split(',')[1] ?? '');
-        };
-        reader.onerror = () => reject(new Error('Could not read file'));
-        reader.readAsDataURL(file);
-      });
+    const failures: string[] = [];
+    let firstId: string | null = null;
 
-      const res = await fetch('/api/extract', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          fileName: file.name,
-          fileBase64: base64,
-          mediaType: file.type || 'application/pdf',
-        }),
-      });
-      const data = (await res.json()) as {
-        extraction?: Extraction;
-        mode?: 'mock' | 'live';
-        error?: string;
-      };
-      if (!res.ok || !data.extraction) {
-        throw new Error(data.error ?? 'Extraction failed');
+    // Process sequentially so live extraction stays within rate limits and the
+    // queue fills in visibly, one document at a time.
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      setProgress(`Extracting ${i + 1} of ${files.length}: ${file.name}`);
+      try {
+        const cert = await extractOne(file);
+        if (!firstId) firstId = cert.id;
+        setCerts((prev) => [cert, ...prev]);
+      } catch (err) {
+        failures.push(`${file.name} (${err instanceof Error ? err.message : 'failed'})`);
       }
-      setMode(data.mode ?? null);
-      const cert = buildCertificate(`upload-${Date.now()}`, file.name, data.extraction);
-      setCerts((prev) => [cert, ...prev]);
-      setSelectedId(cert.id);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong');
-    } finally {
-      setBusy(false);
-      if (fileInput.current) fileInput.current.value = '';
     }
+
+    if (firstId) setSelectedId(firstId);
+    if (failures.length > 0) {
+      setError(`Could not process ${failures.length} file(s): ${failures.join(', ')}`);
+    }
+    setBusy(false);
+    setProgress(null);
+    if (fileInput.current) fileInput.current.value = '';
   }
 
   function handleDecision(id: string, decision: 'approved' | 'rejected', note: string) {
@@ -157,22 +195,24 @@ export default function Home() {
 
       <div className="upload-zone">
         <p>
-          Upload an exemption certificate (PDF, PNG, JPG). The AI extracts fields with
-          per-field confidence; the rules engine decides whether a human needs to look.
+          Upload one or more exemption certificates (PDF, PNG, JPG). The AI extracts
+          fields with per-field confidence; the rules engine decides whether a human
+          needs to look. {busy && progress ? <b>{progress}</b> : null}
         </p>
         <div className="actions">
           <input
             ref={fileInput}
             type="file"
+            multiple
             accept=".pdf,.png,.jpg,.jpeg,.webp"
             style={{ display: 'none' }}
             onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) void handleUpload(file);
+              const files = e.target.files ? Array.from(e.target.files) : [];
+              if (files.length) void handleUpload(files);
             }}
           />
           <button className="btn primary" disabled={busy} onClick={() => fileInput.current?.click()}>
-            {busy ? 'Extracting…' : 'Upload certificate'}
+            {busy ? 'Extracting…' : 'Upload certificates'}
           </button>
         </div>
       </div>
