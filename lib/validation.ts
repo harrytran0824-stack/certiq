@@ -1,4 +1,4 @@
-import { Extraction, FieldKey, ValidationIssue } from './types';
+import { Extraction, FieldKey, IssueCode, ValidationIssue } from './types';
 
 /**
  * Deterministic policy layer that sits on top of AI extraction.
@@ -39,11 +39,11 @@ function parseDateOnly(value: string): Date | null {
 }
 
 /** Fields that must be present (non-blank) for a certificate to be valid. */
-const REQUIRED_FIELDS: { field: FieldKey; message: string }[] = [
-  { field: 'purchaserName', message: 'Purchaser name is missing.' },
-  { field: 'taxIdNumber', message: 'Tax ID / permit number is missing.' },
-  { field: 'state', message: 'Issuing state could not be determined.' },
-  { field: 'exemptionReason', message: 'Exemption reason is missing.' },
+const REQUIRED_FIELDS: { field: FieldKey; code: IssueCode; message: string }[] = [
+  { field: 'purchaserName', code: 'missing_field', message: 'Purchaser name is missing.' },
+  { field: 'taxIdNumber', code: 'missing_tax_id', message: 'Tax ID / permit number is missing.' },
+  { field: 'state', code: 'missing_field', message: 'Issuing state could not be determined.' },
+  { field: 'exemptionReason', code: 'missing_field', message: 'Exemption reason is missing.' },
 ];
 
 export function validateExtraction(extraction: Extraction): ValidationIssue[] {
@@ -54,13 +54,14 @@ export function validateExtraction(extraction: Extraction): ValidationIssue[] {
     issues.push({
       severity: 'error',
       field: 'signaturePresent',
+      code: 'missing_signature',
       message: 'No signature detected. Unsigned certificates are not valid.',
     });
   }
 
-  for (const { field, message } of REQUIRED_FIELDS) {
+  for (const { field, code, message } of REQUIRED_FIELDS) {
     if (isBlank(extraction[field].value)) {
-      issues.push({ severity: 'error', field, message });
+      issues.push({ severity: 'error', field, code, message });
     }
   }
 
@@ -73,6 +74,7 @@ export function validateExtraction(extraction: Extraction): ValidationIssue[] {
       issues.push({
         severity: 'error',
         field: 'expirationDate',
+        code: 'expired',
         message: `Certificate expired on ${exp}.`,
       });
     }
@@ -85,6 +87,7 @@ export function validateExtraction(extraction: Extraction): ValidationIssue[] {
       issues.push({
         severity: 'warning',
         field: 'issueDate',
+        code: 'future_date',
         message: 'Issue date is in the future — possible extraction error.',
       });
     }
@@ -95,6 +98,7 @@ export function validateExtraction(extraction: Extraction): ValidationIssue[] {
       issues.push({
         severity: 'warning',
         field,
+        code: 'low_confidence',
         message: `Low extraction confidence (${Math.round(
           extraction[field].confidence * 100
         )}%) — verify against the source document.`,

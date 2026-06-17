@@ -5,60 +5,24 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import ReviewQueue, { QueueFilter } from '@/components/ReviewQueue';
 import CertDetail from '@/components/CertDetail';
 import InsightsPanel from '@/components/InsightsPanel';
-import { SAMPLE_DOCS } from '@/lib/mock';
-import { suggestStatus, validateExtraction } from '@/lib/validation';
+import { useCerts } from '@/components/CertStoreProvider';
+import { buildCertificate } from '@/lib/certificate';
 import { Certificate, DocumentPreview, Extraction } from '@/lib/types';
-import { sampleDocDataUrl } from '@/lib/preview';
-
-function buildCertificate(
-  id: string,
-  fileName: string,
-  extraction: Extraction,
-  preview?: DocumentPreview
-): Certificate {
-  const issues = validateExtraction(extraction);
-  const status = suggestStatus(issues);
-  const now = new Date().toISOString();
-  return {
-    id,
-    fileName,
-    receivedAt: now,
-    extraction,
-    issues,
-    status,
-    preview:
-      preview ?? { kind: 'sample', dataUrl: sampleDocDataUrl(extraction, fileName) },
-    audit: [
-      { at: now, actor: 'system', action: 'Document ingested and fields extracted' },
-      {
-        at: now,
-        actor: 'system',
-        action:
-          status === 'auto_approved'
-            ? 'Passed all validation rules — auto-approved'
-            : `Routed to human review (${issues.length} issue${issues.length > 1 ? 's' : ''})`,
-      },
-    ],
-  };
-}
 
 export default function Home() {
-  const [certs, setCerts] = useState<Certificate[]>([]);
+  const { certs, addCertificates, recordDecision } = useCerts();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-
-  // Seed the queue on the client only: timestamps are generated at runtime,
-  // so building them during SSR would cause a hydration mismatch.
-  useEffect(() => {
-    const seeded = SAMPLE_DOCS.map((s) => buildCertificate(s.id, s.fileName, s.extraction));
-    setCerts(seeded);
-    setSelectedId(seeded[0]?.id ?? null);
-  }, []);
   const [filter, setFilter] = useState<QueueFilter>('all');
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState<string | null>(null);
   const [mode, setMode] = useState<'mock' | 'live' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+
+  // Select the first certificate once the queue has been seeded.
+  useEffect(() => {
+    if (!selectedId && certs.length > 0) setSelectedId(certs[0].id);
+  }, [certs, selectedId]);
 
   const stats = useMemo(() => {
     const total = certs.length;
@@ -104,12 +68,12 @@ export default function Home() {
       kind: mediaType === 'application/pdf' ? 'pdf' : 'image',
       dataUrl: `data:${mediaType};base64,${base64}`,
     };
-    return buildCertificate(
-      `upload-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      file.name,
-      data.extraction,
-      preview
-    );
+    return buildCertificate({
+      id: `upload-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      fileName: file.name,
+      extraction: data.extraction,
+      preview,
+    });
   }
 
   async function handleUpload(files: File[]) {
@@ -119,15 +83,13 @@ export default function Home() {
     const failures: string[] = [];
     let firstId: string | null = null;
 
-    // Process sequentially so live extraction stays within rate limits and the
-    // queue fills in visibly, one document at a time.
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       setProgress(`Extracting ${i + 1} of ${files.length}: ${file.name}`);
       try {
         const cert = await extractOne(file);
         if (!firstId) firstId = cert.id;
-        setCerts((prev) => [cert, ...prev]);
+        addCertificates([cert]);
       } catch (err) {
         failures.push(`${file.name} (${err instanceof Error ? err.message : 'failed'})`);
       }
@@ -140,28 +102,6 @@ export default function Home() {
     setBusy(false);
     setProgress(null);
     if (fileInput.current) fileInput.current.value = '';
-  }
-
-  function handleDecision(id: string, decision: 'approved' | 'rejected', note: string) {
-    setCerts((prev) =>
-      prev.map((c) =>
-        c.id === id
-          ? {
-              ...c,
-              status: decision,
-              reviewerNote: note.trim() || undefined,
-              audit: [
-                ...c.audit,
-                {
-                  at: new Date().toISOString(),
-                  actor: 'reviewer' as const,
-                  action: decision === 'approved' ? 'Approved by reviewer' : 'Rejected by reviewer',
-                },
-              ],
-            }
-          : c
-      )
-    );
   }
 
   return (
@@ -242,7 +182,7 @@ export default function Home() {
           onFilter={setFilter}
         />
         {selected ? (
-          <CertDetail cert={selected} onDecision={handleDecision} />
+          <CertDetail cert={selected} onDecision={recordDecision} />
         ) : (
           <div className="panel">
             <div className="empty">Select a certificate to review.</div>

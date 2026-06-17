@@ -17,9 +17,18 @@ export interface ExtractedField {
 
 export type Extraction = Record<FieldKey, ExtractedField>;
 
+export type IssueCode =
+  | 'expired'
+  | 'missing_signature'
+  | 'missing_tax_id'
+  | 'missing_field'
+  | 'future_date'
+  | 'low_confidence';
+
 export interface ValidationIssue {
   severity: 'error' | 'warning';
   field?: FieldKey;
+  code: IssueCode;
   message: string;
 }
 
