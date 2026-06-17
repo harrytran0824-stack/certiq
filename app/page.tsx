@@ -121,7 +121,7 @@ export default function Home() {
             </Link>
           </nav>
           <span className={`mode-pill ${mode === 'live' ? 'live' : ''}`}>
-            {mode === 'live' ? 'Live extraction (Claude)' : 'Mock mode — add ANTHROPIC_API_KEY for live extraction'}
+            {mode === 'live' ? 'Live extraction (Claude)' : 'Sandbox environment — add ANTHROPIC_API_KEY for live extraction'}
           </span>
         </div>
       </div>
