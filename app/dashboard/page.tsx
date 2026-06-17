@@ -43,7 +43,7 @@ export default function Dashboard() {
 
       <section className="viz-grid">
         <div className="insight-card">
-          <div className="insight-title">Disposition mix · how 248 docs were routed</div>
+          <div className="insight-title">Disposition mix · how 1,460 docs were routed</div>
           <Donut segments={DISPOSITION} />
         </div>
 
