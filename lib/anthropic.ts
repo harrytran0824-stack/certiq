@@ -51,8 +51,17 @@ export async function extractWithClaude(
     .map((b) => b.text)
     .join('');
 
-  const json = text.replace(/```json|```/g, '').trim();
-  const parsed = JSON.parse(json) as Record<string, { value?: string; confidence?: number }>;
+  // Be tolerant of stray prose or code fences around the JSON object.
+  const cleaned = text.replace(/```json|```/g, '').trim();
+  const match = cleaned.match(/\{[\s\S]*\}/);
+  const json = match ? match[0] : cleaned;
+
+  let parsed: Record<string, { value?: string; confidence?: number }>;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    throw new Error('Model did not return valid JSON for the extraction.');
+  }
 
   const extraction = {} as Extraction;
   for (const key of FIELD_KEYS) {

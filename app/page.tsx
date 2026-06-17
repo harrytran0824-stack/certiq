@@ -1,8 +1,10 @@
 'use client';
 
+import Link from 'next/link';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import ReviewQueue, { QueueFilter } from '@/components/ReviewQueue';
 import CertDetail from '@/components/CertDetail';
+import InsightsPanel from '@/components/InsightsPanel';
 import { SAMPLE_DOCS } from '@/lib/mock';
 import { suggestStatus, validateExtraction } from '@/lib/validation';
 import { Certificate, DocumentPreview, Extraction } from '@/lib/types';
@@ -169,10 +171,22 @@ export default function Home() {
           <h1>CertIQ</h1>
           <span>AI exemption certificate review · human-in-the-loop</span>
         </div>
-        <span className={`mode-pill ${mode === 'live' ? 'live' : ''}`}>
-          {mode === 'live' ? 'Live extraction (Claude)' : 'Mock mode — add ANTHROPIC_API_KEY for live extraction'}
-        </span>
+        <div className="topbar-right">
+          <nav className="topnav">
+            <Link href="/" className="navlink active">
+              Review queue
+            </Link>
+            <Link href="/dashboard" className="navlink">
+              Dashboard
+            </Link>
+          </nav>
+          <span className={`mode-pill ${mode === 'live' ? 'live' : ''}`}>
+            {mode === 'live' ? 'Live extraction (Claude)' : 'Mock mode — add ANTHROPIC_API_KEY for live extraction'}
+          </span>
+        </div>
       </div>
+
+      <InsightsPanel certs={certs} />
 
       <div className="stats">
         <div className="stat">

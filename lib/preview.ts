@@ -1,5 +1,9 @@
 import { Extraction } from './types';
 
+// DocumentPreview is defined in ./types — re-exported here for convenience so
+// existing imports keep working without duplicating the shape.
+export type { DocumentPreview } from './types';
+
 /**
  * Document preview for the review pane.
  *
@@ -9,11 +13,6 @@ import { Extraction } from './types';
  * it's never mistaken for a real filing. A reviewer can then compare the AI's
  * extraction against the document, which is the whole point of the pane.
  */
-export interface DocumentPreview {
-  kind: 'pdf' | 'image' | 'sample';
-  dataUrl: string;
-}
-
 function esc(s: string): string {
   return s
     .replace(/&/g, '&amp;')

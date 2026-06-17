@@ -21,9 +21,34 @@ function isBlank(value: string): boolean {
   return v === '' || v === 'not found' || v === 'n/a' || v === 'unknown';
 }
 
+/** Midnight (local) for a Date, so comparisons are calendar-date based. */
+function startOfDay(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
+/**
+ * Parse a date as a local calendar date. Bare "YYYY-MM-DD" strings are treated
+ * as local — not UTC — so an expiration of "2025-12-31" doesn't read as expired
+ * a day early for reviewers west of UTC.
+ */
+function parseDateOnly(value: string): Date | null {
+  const m = value.trim().match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : startOfDay(d);
+}
+
+/** Fields that must be present (non-blank) for a certificate to be valid. */
+const REQUIRED_FIELDS: { field: FieldKey; message: string }[] = [
+  { field: 'purchaserName', message: 'Purchaser name is missing.' },
+  { field: 'taxIdNumber', message: 'Tax ID / permit number is missing.' },
+  { field: 'state', message: 'Issuing state could not be determined.' },
+  { field: 'exemptionReason', message: 'Exemption reason is missing.' },
+];
+
 export function validateExtraction(extraction: Extraction): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  const now = new Date();
+  const today = startOfDay(new Date());
 
   if (extraction.signaturePresent.value.trim().toLowerCase() !== 'yes') {
     issues.push({
@@ -33,26 +58,18 @@ export function validateExtraction(extraction: Extraction): ValidationIssue[] {
     });
   }
 
-  if (isBlank(extraction.taxIdNumber.value)) {
-    issues.push({
-      severity: 'error',
-      field: 'taxIdNumber',
-      message: 'Tax ID / permit number is missing.',
-    });
-  }
-
-  if (isBlank(extraction.state.value)) {
-    issues.push({
-      severity: 'error',
-      field: 'state',
-      message: 'Issuing state could not be determined.',
-    });
+  for (const { field, message } of REQUIRED_FIELDS) {
+    if (isBlank(extraction[field].value)) {
+      issues.push({ severity: 'error', field, message });
+    }
   }
 
   const exp = extraction.expirationDate.value;
   if (!isBlank(exp) && exp.trim().toLowerCase() !== 'none') {
-    const expDate = new Date(exp);
-    if (!isNaN(expDate.getTime()) && expDate < now) {
+    const expDate = parseDateOnly(exp);
+    // A certificate is valid through its expiration date, so only flag once
+    // the expiration day is strictly in the past.
+    if (expDate && expDate < today) {
       issues.push({
         severity: 'error',
         field: 'expirationDate',
@@ -63,8 +80,8 @@ export function validateExtraction(extraction: Extraction): ValidationIssue[] {
 
   const issue = extraction.issueDate.value;
   if (!isBlank(issue)) {
-    const issueDate = new Date(issue);
-    if (!isNaN(issueDate.getTime()) && issueDate > now) {
+    const issueDate = parseDateOnly(issue);
+    if (issueDate && issueDate > today) {
       issues.push({
         severity: 'warning',
         field: 'issueDate',

@@ -82,10 +82,19 @@ export const SAMPLE_DOCS: SampleDoc[] = [
   },
 ];
 
-/** Rotating mock extraction for uploads when no API key is configured. */
-let mockCursor = 0;
+/**
+ * Deterministic mock extraction for uploads when no API key is configured.
+ *
+ * Picks a sample by hashing the file name, so the same upload always yields the
+ * same demo result and the route stays stateless (module-level counters don't
+ * survive serverless cold starts and race across concurrent requests).
+ */
 export function mockExtract(fileName: string): Extraction {
-  const base = SAMPLE_DOCS[mockCursor % SAMPLE_DOCS.length].extraction;
-  mockCursor += 1;
+  let hash = 0;
+  for (let i = 0; i < fileName.length; i++) {
+    hash = (hash * 31 + fileName.charCodeAt(i)) | 0;
+  }
+  const index = Math.abs(hash) % SAMPLE_DOCS.length;
+  const base = SAMPLE_DOCS[index].extraction;
   return JSON.parse(JSON.stringify(base)) as Extraction;
 }
